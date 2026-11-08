@@ -2,9 +2,9 @@
 
 ![Cortive Memory for Hermes](docs/banner.png)
 
-**Hermes forgets. Cortive doesn't.**
+**Hermes remembers what you tell it. Cortive remembers what you saved.**
 
-[Cortive](https://github.com/KadenDevAi/cortive-releases) is a private knowledge base for your Mac. It keeps the web pages, PDFs, screenshots, voice memos, documents and clipboard snippets you capture, and finds them again by meaning, with an on-device model. This plugin makes that library Hermes's long-term memory. Ask Hermes about something you read last month, and it answers from what you actually saved, with the date and the source.
+[Cortive](https://github.com/KadenDevAi/cortive-releases) is a private knowledge base for your Mac. It keeps the web pages, PDFs, screenshots, voice memos, documents and clipboard snippets you capture, and finds them again by meaning, with an on-device model. This plugin adds that library to Hermes's memory, alongside the built-in memory Hermes already keeps. Ask Hermes about something you read last month, and it answers from what you actually saved, with the date and the source.
 
 - **Recall without being asked.** Before each reply, Hermes gets up to three relevant captures (1,200 characters at most) from your library. With the Cortive app running, recall judges relevance by meaning: on 50 everyday prompts ("write a haiku", "convert 72°F") it attached something to 7, while still recalling the right capture for 48 of 51 questions about saved material. Without the app it only recalls when your message refers to your saved material ("my notes on…", "I saved…", "remember…"), because word matches alone can't judge relevance.
 - **Three tools for digging deeper:**
