@@ -1,0 +1,45 @@
+<!doctype html>
+<!-- Source of docs/recall.png (1200x640, rendered at 2x): real Hermes answers from a test library.
+     Rebuild: see docs/src/render.sh -->
+<html><head><meta charset="utf-8"><style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1200px; height: 640px; overflow: hidden; background: #0f1115; padding: 36px;
+         font: 15.5px/1.6 "SF Mono", Menlo, monospace; color: #d1d1d6; }
+  .term { height: 100%; background: #1c1c1e; border: 1px solid #2c2c2e; border-radius: 14px; padding: 20px 30px; }
+  .bar { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; color: #8e8e93; font-size: 13px; }
+  .bar i { width: 12px; height: 12px; border-radius: 50%; background: #3a3a3c; display: block; }
+  .bar span { margin-left: 12px; }
+  .turn { margin-bottom: 20px; }
+  .you { color: #f5f5f7; } .you b { color: #0a84ff; }
+  .tool { color: #8e8e93; } .tool b { color: #ffd60a; font-weight: 500; }
+  .recall { color: #64d2ff; }
+  .hermes { color: #bf5af2; font-weight: 600; margin-top: 6px; }
+  .ans { color: #d1d1d6; margin-left: 2px; } .ans q { color: #f5f5f7; }
+  hr { border: 0; border-top: 1px solid #2c2c2e; margin: 16px 0; }
+</style></head><body><div class="term">
+  <div class="bar"><i></i><i></i><i></i><span>hermes chat · memory provider: cortive · 91 captures</span></div>
+
+  <div class="turn">
+    <div class="you"><b>❯</b> What were my plans for the Portugal trip?</div>
+    <div class="recall">🧠 Cortive — recalled 1 memory</div>
+    <div class="hermes">☤ Hermes</div>
+    <div class="ans">From your saved <q>Lisbon trip plan.docx</q> (captured Oct 29): Lisbon in May, flights land<br>
+      Friday at 9 am; to book: tram tour of Alfama and a day trip to Sintra; budget ~1,200 euros.</div>
+  </div>
+  <hr>
+  <div class="turn">
+    <div class="you"><b>❯</b> I saved something about baking bread at home, what did it say?</div>
+    <div class="tool">⚡ <b>cortive_search</b> baking bread sourdough &nbsp; ⚡ <b>cortive_get</b> Sourdough notes.html</div>
+    <div class="hermes">☤ Hermes</div>
+    <div class="ans">It was <q>Sourdough notes.html</q>, saved Oct 29: <q>Feed the starter twice a day. Bake at<br>
+      250 degrees with the lid on for 20 minutes.</q></div>
+  </div>
+  <hr>
+  <div class="turn">
+    <div class="you"><b>❯</b> When does the boat to the island leave?</div>
+    <div class="tool">⚡ <b>cortive_search</b> boat island ferry &nbsp; ⚡ <b>cortive_search</b> island trip schedule departure &nbsp; ⚡ <b>cortive_get</b></div>
+    <div class="hermes">☤ Hermes</div>
+    <div class="ans">A clipboard capture from Oct 17 says the ferry to Vashon leaves Pier 52 at 07:40.<br>
+      Heads up: it was saved as a test note, so it may not be a real schedule.</div>
+  </div>
+</div></body></html>

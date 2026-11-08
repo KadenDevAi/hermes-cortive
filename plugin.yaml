@@ -1,0 +1,13 @@
+name: cortive
+label: Cortive Memory
+version: "0.1.0"
+author: Kaden Desmarais
+license: MIT
+homepage: https://github.com/KadenDevAi/hermes-cortive
+description: >-
+  Cortive as Hermes memory: reads the local Cortive knowledge base (SQLite +
+  FTS5) so the agent recalls your captured pages, PDFs, screenshots and
+  transcripts instead of starting cold. Read-only, local-only, no cloud.
+requires_hermes: ">=0.21.5"
+platforms:
+  - macos
