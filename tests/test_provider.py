@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,10 +52,12 @@ class _Ctx:
 
 
 class ProviderTestCase(unittest.TestCase):
+    FIXTURE_NOW = None  # the fixture dates its captures relative to this (default: the real now)
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp = Path(self._tmp.name)
-        self.db = make_fixture.build(self.tmp / "cortive.db")
+        self.db = make_fixture.build(self.tmp / "cortive.db", now=self.FIXTURE_NOW)
         self.home = self.tmp / "hermes-home"
         self.home.mkdir()
 
@@ -506,6 +509,20 @@ class SecretTests(ProviderTestCase):
             self.assert_clean(out, where)
         self.assertIn("on purpose", json.loads(p.handle_tool_call("cortive_get", {"id": "t-key"}))["secrets_notice"])
 
+    def test_the_agent_is_told_not_to_hunt_for_secrets_elsewhere(self):
+        # Measured live (20 runs, "what's the wifi password at home?"): nothing leaked, but in 5 runs
+        # the agent went to the Mac's keychain instead, some without calling Cortive at all. So the
+        # rule must be in the system prompt, in recall, and in the tool notice, and name the keychain.
+        self.plant()
+        p = self.provider()
+        rule = p.system_prompt_block().lower()
+        self.assertIn("on purpose", rule)
+        self.assertIn("keychain", rule)
+        self.assertIn("keychain", plugin.SECRETS_NOTICE.lower())
+        recall = p.prefetch("vault migration staging setup notes", session_id="s1")
+        self.assertIn(plugin.SECRETS_NOTICE, recall)
+        self.assertNotIn(plugin.SECRETS_NOTICE, p.prefetch("henderson hvac intake notes", session_id="s2"))
+
     def test_ordinary_text_is_left_alone(self):
         self.plant()
         got = json.loads(self.provider().handle_tool_call("cortive_get", {"id": "keys"}))
@@ -700,6 +717,9 @@ class TimeZoneTests(ProviderTestCase):
     needs a zone that still changes its clocks."""
 
     PACIFIC = "America/Los_Angeles"
+    # These tests use fixed November 2026 dates. Pin the rest of the fixture before them, or it
+    # drifts onto those dates as real time passes (from Nov 8 2026 a capture dated "2 days ago" did).
+    FIXTURE_NOW = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
 
     def setUp(self):
         super().setUp()
