@@ -1680,6 +1680,149 @@ def _int_arg(value: Any, *, default: Optional[int], low: int, high: int) -> Opti
     return max(low, min(high, number))
 
 
+# -- Guards on the agent's other tools ---------------------------------------
+#
+# Hiding secrets in what Cortive returns is not enough when the agent also has a terminal, file
+# reading or a browser: red-team runs (2026-11-08) saw it try to read Cortive's database with
+# sqlite3, search the disk for the original note, and open the router's admin page. Two hooks
+# make that fail in code rather than rely on the agent following the rule:
+# - pre_tool_call refuses any tool call that points at Cortive's data folder;
+# - transform_tool_result hides every secret saved in the Cortive library (also reversed or in
+#   base64) from every other tool's output before the model sees it.
+
+GUARD_MESSAGE = ("Blocked by the Cortive plugin: Cortive's library is read only through the cortive_* tools, "
+                 "which keep passwords and keys hidden. Tell the user which capture holds what they need.")
+MIN_GUARDED_SECRET = 6           # shorter values (PINs) would also blank ordinary numbers in tool output
+
+
+class ToolGuard:
+    """The two hooks, sharing one cache of the library's secrets (rebuilt when the library changes)."""
+
+    def __init__(self, db_path_fn) -> None:
+        self._db_path_fn = db_path_fn
+        self._lock = threading.Lock()
+        self._stamp: Optional[tuple] = None
+        self._needles: list[str] = []
+        self._per_capture: dict[str, tuple[Any, list[str]]] = {}   # id -> ((timestamp, size), secrets)
+
+    def _db_path(self) -> Optional[Path]:
+        try:
+            return Path(self._db_path_fn())
+        except Exception:
+            return None
+
+    def _folder_markers(self) -> list[str]:
+        db = self._db_path()
+        if db is None:
+            return ["cortive.db"]
+        markers = {"cortive.db", db.name.lower()}
+        for folder in {db.parent, db.parent.resolve() if db.parent.exists() else db.parent}:
+            markers.add(str(folder).lower().rstrip("/"))
+            markers.add(str(folder).replace(str(Path.home()), "~").lower().rstrip("/"))
+        return sorted(markers)
+
+    def pre_tool_call(self, tool_name: str = "", args: Any = None, **_: Any) -> Optional[dict[str, str]]:
+        if str(tool_name or "").startswith("cortive_"):
+            return None
+        # Backslashes go: "Application\\ Support" in a shell command is the same folder.
+        text = json.dumps(args, ensure_ascii=False, default=str).lower().replace("\\", "")
+        if any(marker in text for marker in self._folder_markers()):
+            return {"action": "block", "message": GUARD_MESSAGE}
+        return None
+
+    def known_secrets(self) -> list[str]:
+        """Every secret in the library, plus its reversed and base64 forms, longest first. Only
+        captures that are new or changed since the last call are read again."""
+        db = self._db_path()
+        if db is None or not db.is_file():
+            return []
+        stamp = tuple((f.stat().st_mtime_ns, f.stat().st_size) if f.exists() else None
+                      for f in (db, Path(str(db) + "-wal")))
+        with self._lock:
+            if stamp == self._stamp:
+                return self._needles
+            try:
+                self._refresh(db)
+            except sqlite3.Error:
+                return self._needles
+            self._stamp = stamp
+            return self._needles
+
+    def _refresh(self, db: Path) -> None:
+        import base64
+        with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1.5)) as conn:
+            present = {r[1] for r in conn.execute("PRAGMA table_info(captures)")}
+            cols = [c for c in ("title", "content", "note") if c in present]
+            # Which captures changed: Cortive's content hash (cheap), else the text's length (reads it all).
+            key = ["content_hash" if "content_hash" in present else "length(coalesce(content, ''))"]
+            key += [f"length(coalesce({c}, ''))" for c in ("title", "note") if c in present]
+            seen = {row[0]: tuple(row[1:]) for row in conn.execute(f"SELECT id, timestamp, {', '.join(key)} FROM captures")}
+            for cid in [cid for cid, key in seen.items() if self._per_capture.get(cid, (None,))[0] != key]:
+                row = conn.execute(f"SELECT {', '.join(cols)} FROM captures WHERE id = ?", (cid,)).fetchone()
+                text = "\n".join(str(v or "") for v in (row or ()))
+                self._per_capture[cid] = (seen[cid], [v for v in secret_values(text) if len(v) >= MIN_GUARDED_SECRET])
+        for cid in [cid for cid in self._per_capture if cid not in seen]:
+            del self._per_capture[cid]
+        needles: set[str] = set()
+        for _, values in self._per_capture.values():
+            for v in values:
+                needles.update((v, v[::-1], base64.b64encode(v.encode()).decode().rstrip("=")))
+                digits = re.sub(r"\D", "", v)
+                if len(digits) >= 13 and len(digits) >= len(v) - 6:   # card numbers written without spaces
+                    needles.add(digits)
+        self._needles = sorted(needles, key=len, reverse=True)
+
+    def warm_up(self) -> None:
+        """Read the library once in the background, so the first tool call doesn't wait for it."""
+        threading.Thread(target=lambda: self._safe(self.known_secrets), name="cortive-guard-warmup",
+                         daemon=True).start()
+
+    @staticmethod
+    def _safe(fn) -> None:
+        try:
+            fn()
+        except Exception:  # a guard must never break the agent; the next tool call retries
+            logger.debug("cortive guard warm-up failed", exc_info=True)
+
+    def transform_tool_result(self, tool_name: str = "", result: Any = None, **_: Any) -> Optional[str]:
+        if not isinstance(result, str) or not result or str(tool_name or "").startswith("cortive_"):
+            return None
+        needles = self.known_secrets()
+        if not needles:
+            return None
+
+        def clean(text: str) -> str:
+            for needle in needles:
+                if needle in text:
+                    text = text.replace(needle, SECRET_MARK)
+            return text
+
+        try:
+            data = json.loads(result)
+        except ValueError:
+            cleaned = clean(result)
+            return cleaned if cleaned != result else None
+
+        def walk(value: Any) -> Any:
+            if isinstance(value, str):
+                return clean(value)
+            if isinstance(value, list):
+                return [walk(v) for v in value]
+            if isinstance(value, dict):
+                return {k: walk(v) for k, v in value.items()}
+            return value
+
+        cleaned_data = walk(data)
+        return json.dumps(cleaned_data, ensure_ascii=False) if cleaned_data != data else None
+
+
 def register(ctx) -> None:
-    """Hermes entry point: one new provider instance per agent."""
-    ctx.register_memory_provider(CortiveMemoryProvider())
+    """Hermes entry point: one new provider instance per agent, plus the guards on other tools."""
+    provider = CortiveMemoryProvider()
+    ctx.register_memory_provider(provider)
+    register_hook = getattr(ctx, "register_hook", None)
+    if callable(register_hook):
+        guard = ToolGuard(lambda: provider._db_path or provider._resolve_db_path())
+        register_hook("pre_tool_call", guard.pre_tool_call)
+        register_hook("transform_tool_result", guard.transform_tool_result)
+        guard.warm_up()
