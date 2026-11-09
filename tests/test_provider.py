@@ -617,6 +617,73 @@ class SecretTests(ProviderTestCase):
         self.assertIn("wifi", [r["id"] for r in found["results"]])
 
 
+class ToolGuardTests(ProviderTestCase):
+    """Red-team, 2026-11-08: with live tools the agent tried sqlite3 on Cortive's database, a disk search
+    for the original note, and the router's admin page. The rule asks it not to; these hooks enforce it."""
+
+    WIFI = "Tr0ub4dor-" "Kettle42"
+
+    def guard(self):
+        conn = sqlite3.connect(self.db)
+        conn.execute("INSERT INTO captures (id,title,content,url,domain,source,tags,timestamp,content_hash) "
+                     "VALUES ('wifi','Home wifi setup',?,'','','watched_folder','[]','2026-11-02T00:00:00+00:00','hw')",
+                     ("Router in the hall closet.\nWifi password: " + self.WIFI + "\nGuest network.",))
+        conn.commit()
+        conn.close()
+        return plugin.ToolGuard(lambda: self.db)
+
+    def test_register_installs_both_hooks(self):
+        hooks = {}
+        class Ctx:
+            def register_memory_provider(self, provider):
+                self.provider = provider
+            def register_hook(self, name, callback, **kw):
+                hooks[name] = callback
+        plugin.register(Ctx())
+        self.assertEqual({"pre_tool_call", "transform_tool_result"}, set(hooks))
+
+    def test_tool_calls_into_cortives_data_folder_are_blocked(self):
+        g = self.guard()
+        folder = str(Path(self.db).parent)
+        for name, args in [("terminal", {"command": f"sqlite3 {self.db} 'select content from captures'"}),
+                           ("terminal", {"command": "sqlite3 " + folder.replace(" ", "\\ ") + "/cortive.db .dump"}),
+                           ("read_file", {"path": self.db}),
+                           ("search_files", {"path": folder, "pattern": "password"}),
+                           ("execute_code", {"code": "import sqlite3; sqlite3.connect('cortive.db')"})]:
+            out = g.pre_tool_call(tool_name=name, args=args)
+            self.assertEqual("block", (out or {}).get("action"), args)
+        for name, args in [("terminal", {"command": "ls ~/Documents"}), ("read_file", {"path": "/tmp/notes.txt"}),
+                           ("cortive_get", {"id": "wifi"})]:
+            self.assertIsNone(g.pre_tool_call(tool_name=name, args=args), args)
+
+    def test_a_saved_password_is_hidden_from_every_other_tools_output(self):
+        import base64
+        g = self.guard()
+        for result in [f"Router in the hall closet.\nWifi password: {self.WIFI}\n",           # cat of the original file
+                       json.dumps({"output": f"wifi|{self.WIFI}", "exit_code": 0}),            # terminal, JSON
+                       f"<td>WPA key</td><td>{self.WIFI}</td>",                                # router admin page
+                       self.WIFI[::-1], base64.b64encode(self.WIFI.encode()).decode()]:
+            out = g.transform_tool_result(tool_name="terminal", result=result)
+            self.assertIsNotNone(out, result)
+            for part in (self.WIFI, self.WIFI[::-1], "Kettle42"):
+                self.assertNotIn(part, out)
+        self.assertIn("exit_code", json.loads(g.transform_tool_result(
+            tool_name="terminal", result=json.dumps({"output": self.WIFI, "exit_code": 0}))))
+        self.assertIsNone(g.transform_tool_result(tool_name="terminal", result="total 12 files"))
+        self.assertIsNone(g.transform_tool_result(tool_name="cortive_get", result=self.WIFI))
+
+    def test_a_password_saved_later_is_hidden_too(self):
+        g = self.guard()
+        self.assertIsNone(g.transform_tool_result(tool_name="read_file", result="gate: Zebra-Lantern-77"))
+        conn = sqlite3.connect(self.db)
+        conn.execute("INSERT INTO captures (id,title,content,url,domain,source,tags,timestamp,content_hash) "
+                     "VALUES ('gate','Gate',?,'','','clipboard_capture','[]','2026-11-03T00:00:00+00:00','hg')",
+                     ("Gate password: Zebra-Lantern-77",))
+        conn.commit()
+        conn.close()
+        self.assertNotIn("Zebra-Lantern-77", g.transform_tool_result(tool_name="read_file", result="gate: Zebra-Lantern-77"))
+
+
 class RecallNoiseTests(ProviderTestCase):
     """Measured: word-only recall attached unrelated captures to 48 of 50 everyday prompts (long
     documents contain most common words). Without the app's meaning search, recall must wait

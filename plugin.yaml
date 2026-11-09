@@ -11,3 +11,6 @@ description: >-
 requires_hermes: ">=0.21.5"
 platforms:
   - macos
+provides_hooks:
+  - pre_tool_call          # refuses other tools' calls into Cortive's data folder
+  - transform_tool_result  # hides passwords saved in Cortive from other tools' output
