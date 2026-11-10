@@ -1,0 +1,56 @@
+# Runs the plugin's offline test suite against the newest Hermes Agent release.
+#
+# - Every push and pull request: catches mistakes in the plugin itself.
+# - Every Monday: catches a new Hermes release that breaks the plugin, even when
+#   nothing here changed. A failed scheduled run emails the repo owner.
+name: Tests
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 14 * * 1" # Mondays 14:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (Hermes latest release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the plugin
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Find the newest Hermes Agent release
+        id: hermes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view --repo NousResearch/hermes-agent --json tagName --jq .tagName)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Testing against Hermes Agent $tag" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check out Hermes Agent ${{ steps.hermes.outputs.tag }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NousResearch/hermes-agent
+          ref: ${{ steps.hermes.outputs.tag }}
+          path: .hermes-agent
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Run the tests (standard library only, no network)
+        env:
+          HERMES_AGENT_DIR: ${{ github.workspace }}/.hermes-agent
+        run: python -m unittest discover -s tests -v
