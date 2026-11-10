@@ -16,7 +16,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.ref }}
+  # Pull requests: a new push cancels the PR's older run. Everything else
+  # (main, the weekly check, manual runs) gets its own group so no result is
+  # ever cancelled or replaced.
+  group: tests-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
