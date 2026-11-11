@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Problem with the Cortive app itself
+    url: https://github.com/KadenDevAi/cortive-releases/issues/new/choose
+    about: Installing, capturing, searching or settings in the Cortive Mac app. The plugin only reads Cortive's library.
