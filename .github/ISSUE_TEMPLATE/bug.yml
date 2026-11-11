@@ -1,0 +1,72 @@
+name: Bug report
+description: Cortive Memory isn't working as it should in Hermes.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this.
+
+        **Bug reports are public.** Anyone can read them. Please don't paste anything from your Cortive library (page text, PDFs, screenshots, transcripts, titles or links), what Hermes recalled from it, passwords, API keys, or other private details. Describe the problem in general terms instead.
+
+        If the problem is in the Cortive app itself rather than in Hermes, report it at [cortive-releases](https://github.com/KadenDevAi/cortive-releases/issues/new/choose).
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: Run `hermes plugins list` and copy the Version shown for `cortive`.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: hermes-version
+    attributes:
+      label: Hermes Agent version
+      description: The first line of `hermes --version`.
+      placeholder: "Hermes Agent v0.23.1"
+    validations:
+      required: true
+  - type: input
+    id: cortive-version
+    attributes:
+      label: Cortive version
+      description: Shown at the bottom of Cortive's Settings, for example "Cortive 0.2.0". Write "not installed" if you don't have Cortive.
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      description: Apple menu → About This Mac, for example "macOS 15.1".
+      placeholder: "macOS 15.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where were you using Hermes?
+      options:
+        - Terminal (hermes chat or the TUI)
+        - A messaging app through the gateway (Telegram, Discord, Slack…)
+        - A scheduled job or sub-agent
+        - Somewhere else
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, step by step, and what went wrong. Error messages help, as long as they don't contain your saved content.
+      placeholder: |
+        1. Started hermes chat
+        2. Asked about ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
