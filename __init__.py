@@ -1711,21 +1711,26 @@ class ToolGuard:
         except Exception:
             return None
 
+    @staticmethod
+    def _flat(text: str) -> str:
+        """Lowercase, without slashes or backslashes: "Application\\ Support" in a shell command,
+        and a Windows folder written with \\, \\\\ (JSON, Python strings) or /, all compare equal."""
+        return text.lower().replace("\\", "").replace("/", "")
+
     def _folder_markers(self) -> list[str]:
         db = self._db_path()
         if db is None:
             return ["cortive.db"]
         markers = {"cortive.db", db.name.lower()}
         for folder in {db.parent, db.parent.resolve() if db.parent.exists() else db.parent}:
-            markers.add(str(folder).lower().rstrip("/"))
-            markers.add(str(folder).replace(str(Path.home()), "~").lower().rstrip("/"))
+            markers.add(self._flat(str(folder)))
+            markers.add(self._flat(str(folder).replace(str(Path.home()), "~")))
         return sorted(markers)
 
     def pre_tool_call(self, tool_name: str = "", args: Any = None, **_: Any) -> Optional[dict[str, str]]:
         if str(tool_name or "").startswith("cortive_"):
             return None
-        # Backslashes go: "Application\\ Support" in a shell command is the same folder.
-        text = json.dumps(args, ensure_ascii=False, default=str).lower().replace("\\", "")
+        text = self._flat(json.dumps(args, ensure_ascii=False, default=str))
         if any(marker in text for marker in self._folder_markers()):
             return {"action": "block", "message": GUARD_MESSAGE}
         return None
