@@ -656,6 +656,7 @@ class ToolGuardTests(ProviderTestCase):
                            ("cortive_get", {"id": "wifi"})]:
             self.assertIsNone(g.pre_tool_call(tool_name=name, args=args), args)
 
+    @unittest.skipUnless(os.name == "nt", "Windows paths: elsewhere C:\\... is read as one file name")
     def test_windows_paths_into_cortives_data_folder_are_blocked(self):
         # On Windows the library is %APPDATA%\cortive-ai\cortive.db. A folder written with
         # backslashes, forward slashes, or doubled backslashes (as in JSON or a Python string) is
