@@ -30,6 +30,7 @@ import re
 import sqlite3
 import sys
 import threading
+import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -687,13 +688,13 @@ class CortiveMemoryProvider(MemoryProvider):
         """Cheap local checks only: the library file exists and its schema is one we can read."""
         path = self._resolve_db_path()
         if not path.is_file():
-            if self._uses_default_path() and sys.platform != "darwin":
+            if self._uses_default_path() and sys.platform not in ("darwin", "win32"):
                 self._reason = (
-                    f"Cortive is a Mac app (Apple silicon, macOS 14 or later), and this plugin reads its library "
-                    f"on the same computer, so it can't run here. Cortive: {DOWNLOAD_URL}")
+                    f"Cortive runs on a Mac (Apple silicon, macOS 14 or later) or a Windows 10 or 11 PC, and this "
+                    f"plugin reads its library on the same computer, so it can't run here. Cortive: {DOWNLOAD_URL}")
             elif self._uses_default_path() and not cortive_app_installed():
                 self._reason = (
-                    f"Cortive isn't installed on this Mac, so there is no library to read. Install the free "
+                    f"Cortive isn't installed on this {_this_computer()}, so there is no library to read. Install the free "
                     f"beta from {DOWNLOAD_URL}, open it once, then start a new Hermes session.")
             elif self._uses_default_path():
                 self._reason = (
@@ -1485,11 +1486,18 @@ EMPTY_LIBRARY_HINT = ("Cortive's library is empty: nothing has been captured yet
                       "imported files.")
 
 
+def _this_computer() -> str:
+    return "PC" if sys.platform == "win32" else "Mac"
+
+
 def cortive_app_installed() -> bool:
-    """Whether Cortive.app is where its installer puts it (or the app has run as this user)."""
+    """Whether Cortive is where its installer puts it (or the app has run as this user)."""
+    home = Path.home()
+    if sys.platform == "win32":
+        local = Path(os.environ.get("LOCALAPPDATA") or str(home / "AppData" / "Local"))
+        return any(p.exists() for p in (local / "Cortive" / "cortive-desktop.exe", local / "cortive-ai"))
     if sys.platform != "darwin":
         return False
-    home = Path.home()
     return any(p.exists() for p in (Path("/Applications/Cortive.app"), home / "Applications" / "Cortive.app",
                                      home / "Library" / "Application Support" / "Cortive"))
 
@@ -1514,11 +1522,102 @@ _SOURCE_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
+def _ask_socket(path: Path, request: bytes, timeout: float) -> Optional[bytes]:
+    """One request and its reply over the app's Unix socket (macOS)."""
+    import socket
+    import stat
+    if not hasattr(socket, "AF_UNIX") or not stat.S_ISSOCK(os.stat(path).st_mode):
+        return None
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        sock.connect(str(path))
+        sock.sendall(request)
+        data = b""
+        while not data.endswith(b"\n") and len(data) <= APP_MAX_REPLY_BYTES:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+    return data
+
+
+# The app's pipe names (Cortive for Windows, agent_socket.rs): random, so another account can't
+# guess them. Only a name of this form is opened, so the file can't point the plugin elsewhere.
+_PIPE_NAME_RE = re.compile(r"\\\\\.\\pipe\\cortive-agent-[0-9a-f]{32}")
+
+
+def _ask_pipe(name_file: Path, request: bytes, timeout: float) -> Optional[bytes]:
+    """One request and its reply over the app's named pipe (Windows). `name_file` holds the
+    pipe's name; the app writes it at start into its own folder, which only this account can read."""
+    import _winapi
+    name = name_file.read_text(encoding="ascii").strip()
+    if not _PIPE_NAME_RE.fullmatch(name):
+        return None
+    deadline = time.monotonic() + timeout
+
+    def left_ms() -> int:
+        return max(0, int((deadline - time.monotonic()) * 1000))
+
+    while True:
+        try:
+            handle = _winapi.CreateFile(name, _winapi.GENERIC_READ | _winapi.GENERIC_WRITE, 0, _winapi.NULL,
+                                        _winapi.OPEN_EXISTING, _winapi.FILE_FLAG_OVERLAPPED, _winapi.NULL)
+            break
+        except OSError as e:
+            # Every instance busy for a moment (the app is opening the next one): wait, within the time.
+            if getattr(e, "winerror", None) != _winapi.ERROR_PIPE_BUSY or not left_ms():
+                raise
+            try:
+                _winapi.WaitNamedPipe(name, min(left_ms(), 250))
+            except OSError:
+                pass
+    try:
+        ov, _ = _winapi.WriteFile(handle, request, overlapped=True)
+        if not _pipe_done(ov, left_ms()):
+            return None
+        data = b""
+        while not data.endswith(b"\n") and len(data) <= APP_MAX_REPLY_BYTES:
+            try:
+                ov, _ = _winapi.ReadFile(handle, 65536, overlapped=True)
+            except OSError:
+                break  # the app closed its end
+            if not _pipe_done(ov, left_ms()):
+                break
+            chunk = bytes(ov.getbuffer())
+            if not chunk:
+                break
+            data += chunk
+        return data
+    finally:
+        _winapi.CloseHandle(handle)
+
+
+def _pipe_done(ov: Any, wait_ms: int) -> bool:
+    """Waits up to `wait_ms` for an overlapped pipe read or write; cancels it if it isn't done."""
+    import _winapi
+    if _winapi.WaitForMultipleObjects([ov.event], False, wait_ms) != _winapi.WAIT_OBJECT_0:
+        ov.cancel()
+        try:
+            ov.GetOverlappedResult(True)
+        except OSError:
+            pass
+        return False
+    try:
+        _, err = ov.GetOverlappedResult(True)
+    except OSError:
+        return False
+    return err == 0
+
+
 def default_socket_path() -> Path:
     """Where the running Cortive app listens for agent searches (see the app's agent_socket.rs)."""
     home = Path.home()
     if sys.platform == "darwin":
         return home / "Library" / "Application Support" / "Cortive" / "agent" / "search.sock"
+    if os.name == "nt":
+        # On Windows: the file holding the app's pipe name (readable only by this account).
+        base = os.environ.get("LOCALAPPDATA") or str(home / "AppData" / "Local")
+        return Path(base) / "cortive-ai" / "agent" / "search.pipe"
     base = os.environ.get("XDG_DATA_HOME") or str(home / ".local" / "share")
     return Path(base) / "Cortive" / "agent" / "search.sock"
 
@@ -1528,24 +1627,12 @@ def app_search(path: Path, query: str, limit: int, timeout: float,
     """Ask the running Cortive app to rank `query` with its own search (words + meaning).
     Returns [(capture id, meaning score or None)] best first, or None when the app isn't
     available (not running, older version, busy, or any error): callers fall back to words."""
-    import socket
-    import stat
-    if not hasattr(socket, "AF_UNIX"):
-        return None
+    request = json.dumps({"op": "search", "query": query[:1000], "limit": max(1, min(limit, 50))})
     try:
-        if not stat.S_ISSOCK(os.stat(path).st_mode):
+        ask = _ask_pipe if os.name == "nt" else _ask_socket
+        data = ask(Path(path), request.encode("utf-8") + b"\n", timeout)
+        if data is None:
             return None
-        request = json.dumps({"op": "search", "query": query[:1000], "limit": max(1, min(limit, 50))})
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(timeout)
-            sock.connect(str(path))
-            sock.sendall(request.encode("utf-8") + b"\n")
-            data = b""
-            while not data.endswith(b"\n") and len(data) <= APP_MAX_REPLY_BYTES:
-                chunk = sock.recv(65536)
-                if not chunk:
-                    break
-                data += chunk
         reply = json.loads(data.decode("utf-8"))
     except (OSError, ValueError, UnicodeDecodeError):
         return None
