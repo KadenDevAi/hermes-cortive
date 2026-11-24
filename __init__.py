@@ -1544,6 +1544,10 @@ def _ask_socket(path: Path, request: bytes, timeout: float) -> Optional[bytes]:
 # The app's pipe names (Cortive for Windows, agent_socket.rs): random, so another account can't
 # guess them. Only a name of this form is opened, so the file can't point the plugin elsewhere.
 _PIPE_NAME_RE = re.compile(r"\\\\\.\\pipe\\cortive-agent-[0-9a-f]{32}")
+# CreateFile flags (winbase.h) so the server at the other end may identify this account but
+# never act as it: SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION. Without them a pipe server
+# gets impersonation rights by default, which would matter if a program ever posed as Cortive.
+_PIPE_IDENTIFY_ONLY = 0x00100000 | 0x00010000
 
 
 def _ask_pipe(name_file: Path, request: bytes, timeout: float) -> Optional[bytes]:
@@ -1561,7 +1565,8 @@ def _ask_pipe(name_file: Path, request: bytes, timeout: float) -> Optional[bytes
     while True:
         try:
             handle = _winapi.CreateFile(name, _winapi.GENERIC_READ | _winapi.GENERIC_WRITE, 0, _winapi.NULL,
-                                        _winapi.OPEN_EXISTING, _winapi.FILE_FLAG_OVERLAPPED, _winapi.NULL)
+                                        _winapi.OPEN_EXISTING, _winapi.FILE_FLAG_OVERLAPPED | _PIPE_IDENTIFY_ONLY,
+                                        _winapi.NULL)
             break
         except OSError as e:
             # Every instance busy for a moment (the app is opening the next one): wait, within the time.
@@ -1804,11 +1809,20 @@ class ToolGuard:
         and a Windows folder written with \\, \\\\ (JSON, Python strings) or /, all compare equal."""
         return text.lower().replace("\\", "").replace("/", "")
 
+    # Cortive's Windows folders as a command can name them without spelling the path out:
+    # %APPDATA%\cortive-ai (the library) and %LOCALAPPDATA%\cortive-ai (secret, pairing, agent
+    # pipe name), in cmd's %VAR% and PowerShell's $env:VAR / ${env:VAR} forms. Already _flat.
+    _ENV_FOLDER_MARKERS = tuple(
+        f"{form.format(var)}cortive-ai"
+        for var in ("appdata", "localappdata")
+        for form in ("%{}%", "$env:{}", "${{env:{}}}")
+    )
+
     def _folder_markers(self) -> list[str]:
         db = self._db_path()
         if db is None:
-            return ["cortive.db"]
-        markers = {"cortive.db", db.name.lower()}
+            return ["cortive.db", *self._ENV_FOLDER_MARKERS]
+        markers = {"cortive.db", db.name.lower(), *self._ENV_FOLDER_MARKERS}
         for folder in {db.parent, db.parent.resolve() if db.parent.exists() else db.parent}:
             markers.add(self._flat(str(folder)))
             markers.add(self._flat(str(folder).replace(str(Path.home()), "~")))

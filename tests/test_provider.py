@@ -677,6 +677,21 @@ class ToolGuardTests(ProviderTestCase):
                            ("read_file", {"path": r"C:\Users\Kim\AppData\Roaming\Code\settings.json"})]:
             self.assertIsNone(g.pre_tool_call(tool_name=name, args=args), args)
 
+    def test_cortives_windows_folders_named_by_environment_variable_are_blocked(self):
+        # A command can name the folder without spelling it out: cmd's %APPDATA%, PowerShell's
+        # $env:APPDATA. Plain strings, so this runs on every system.
+        g = self.guard()
+        for name, args in [("terminal", {"command": r"type %APPDATA%\cortive-ai\cortive.db"}),
+                           ("terminal", {"command": r"Get-ChildItem $env:APPDATA\cortive-ai"}),
+                           ("terminal", {"command": r"dir ${env:AppData}/Cortive-AI"}),
+                           ("terminal", {"command": r"type %LOCALAPPDATA%\cortive-ai\hmac_secret"}),
+                           ("terminal", {"command": r"Get-Content $env:LOCALAPPDATA\cortive-ai\agent\search.pipe"})]:
+            out = g.pre_tool_call(tool_name=name, args=args)
+            self.assertEqual("block", (out or {}).get("action"), args)
+        for name, args in [("terminal", {"command": r"dir %APPDATA%\Code"}),
+                           ("terminal", {"command": r"Get-ChildItem $env:LOCALAPPDATA\Programs"})]:
+            self.assertIsNone(g.pre_tool_call(tool_name=name, args=args), args)
+
     def test_a_saved_password_is_hidden_from_every_other_tools_output(self):
         import base64
         g = self.guard()
