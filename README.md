@@ -4,7 +4,7 @@
 
 **Hermes remembers what you tell it. Cortive remembers what you saved.**
 
-[Cortive](https://github.com/KadenDevAi/cortive-releases) is a private knowledge base for your Mac. It keeps the web pages, PDFs, screenshots, voice memos, documents and clipboard snippets you capture, and finds them again by meaning, with an on-device model. This plugin adds that library to Hermes's memory, alongside the built-in memory Hermes already keeps. Ask Hermes about something you read last month, and it answers from what you actually saved, with the date and the source.
+[Cortive](https://github.com/KadenDevAi/cortive-releases) is a private knowledge base for your Mac or Windows PC. It keeps the web pages, PDFs, screenshots, voice memos, documents and clipboard snippets you capture, and finds them again by meaning, with an on-device model. This plugin adds that library to Hermes's memory, alongside the built-in memory Hermes already keeps. Ask Hermes about something you read last month, and it answers from what you actually saved, with the date and the source.
 
 - **Recall without being asked.** Before each reply, Hermes gets up to three relevant captures (1,200 characters at most) from your library. With the Cortive app running, recall judges relevance by meaning: on 50 everyday prompts ("write a haiku", "convert 72°F") it attached something to 7, while still recalling the right capture for 48 of 51 questions about saved material. Without the app it only recalls when your message refers to your saved material ("my notes on…", "I saved…", "remember…"), because word matches alone can't judge relevance.
 - **Three tools for digging deeper:**
@@ -12,7 +12,7 @@
   - `cortive_get`: one capture in full, including its screenshot. Long documents are read page by page.
   - `cortive_collections`: the whole library in one call (totals, where captures came from, the newest ones, and every collection with example titles), or everything inside one collection.
 - **Understands what you mean.** While the Cortive app is running, searches go through Cortive's own on-device search, which finds by meaning as well as by words: "my Portugal trip" finds the capture that only says "Lisbon". Without the app, it searches by words.
-- **Local, read-only, no keys.** It reads one file on your computer and talks only to the Cortive app on the same Mac. No network calls, no accounts, no credentials, and nothing in your library is ever changed.
+- **Local, read-only, no keys.** It reads one file on your computer and talks only to the Cortive app on the same computer. No network calls, no accounts, no credentials, and nothing in your library is ever changed.
 
 ## Get Cortive
 
@@ -23,6 +23,8 @@ curl -fsSL https://raw.githubusercontent.com/KadenDevAi/cortive-releases/main/in
 ```
 
 Or download the DMG from [Cortive's releases](https://github.com/KadenDevAi/cortive-releases/releases/latest). Open Cortive once and capture a few things (a page, a screenshot, a PDF).
+
+On a Windows 10 or 11 PC, install Cortive for Windows from the same releases page once it is published there, open it once, and capture a few things. Hermes runs natively on Windows; the plugin works the same way there.
 
 ## Install
 
@@ -35,7 +37,7 @@ hermes config set memory.provider cortive
 
 Start a new chat. The system prompt now says `Cortive knowledge base active: N captures`, and replies that used your library show `🧠 Cortive — recalled N memories`.
 
-Cortive keeps its library at `~/Library/Application Support/cortive-ai/cortive.db`. If yours is somewhere else, run `hermes memory setup` and set `db_path`, or set the `CORTIVE_DB_PATH` environment variable.
+Cortive keeps its library at `~/Library/Application Support/cortive-ai/cortive.db` on a Mac and `%APPDATA%\cortive-ai\cortive.db` on Windows. If yours is somewhere else, run `hermes memory setup` and set `db_path`, or set the `CORTIVE_DB_PATH` environment variable.
 
 Hermes uses one external memory provider at a time, so selecting `cortive` replaces any other provider you had (Hermes's built-in memory keeps working).
 
@@ -45,7 +47,7 @@ Hermes uses one external memory provider at a time, so selecting `cortive` repla
 |---|---|
 | **Reads** | Cortive's library file (`cortive.db`), opened with SQLite `mode=ro` and `query_only`, so a write is refused by SQLite itself. Tables: `captures`, `captures_fts`, `collections`, `deleted_captures`. |
 | **Writes** | Only inside Hermes's own data folder: `<hermes home>/plugin-data/cortive/config.json` (if you set `db_path`) and `…/screenshots/<id>.png` when `cortive_get` opens a capture that has a screenshot. |
-| **Talks to** | The Cortive app on this Mac, through its private search socket (`~/Library/Application Support/Cortive/agent/search.sock`, readable only by your account). It sends the search text and gets back capture ids and scores. If the app isn't running, nothing is sent and search falls back to words. Override the path with `CORTIVE_AGENT_SOCKET`. |
+| **Talks to** | The Cortive app on the same computer. On a Mac, through its private search socket (`~/Library/Application Support/Cortive/agent/search.sock`, readable only by your account). On Windows, through a private named pipe whose random name the app writes to `%LOCALAPPDATA%\cortive-ai\agent\search.pipe` (readable only by your account); the plugin opens only a pipe named like Cortive's own. It sends the search text and gets back capture ids and scores. If the app isn't running, nothing is sent and search falls back to words. Override the path (the socket, or on Windows the file holding the pipe's name) with `CORTIVE_AGENT_SOCKET`. |
 | **Never** | Network calls, credentials, `.env`/`auth.json`/keychain reads, background services, changes to Cortive's library or settings, self-updates. |
 | **Skips** | Encrypted captures, captures you deleted (in Cortive's Recently Deleted), and captures with no text. |
 

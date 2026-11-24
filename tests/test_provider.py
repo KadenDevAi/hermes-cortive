@@ -122,8 +122,12 @@ class AvailabilityTests(ProviderTestCase):
                            ("cortive_collections", {})]:
             p.handle_tool_call(tool, args)
         self.assertEqual(before, self.db.read_bytes())
-        with self.assertRaises(sqlite3.OperationalError):
-            p._connect(self.db, 100).execute("DELETE FROM captures")
+        conn = p._connect(self.db, 100)
+        try:
+            with self.assertRaises(sqlite3.OperationalError):
+                conn.execute("DELETE FROM captures")
+        finally:
+            conn.close()  # Windows can't remove the test folder while the file is open
 
 
 class SearchTests(ProviderTestCase):
@@ -719,7 +723,7 @@ class RecallNoiseTests(ProviderTestCase):
             self.assertTrue(p.prefetch(q, session_id="s1"), q)
 
     def test_the_apps_meaning_recall_needs_no_such_cue(self):
-        app = FakeApp(ranked(("hvac-notes", 0.72)))
+        app = fake_app(ranked(("hvac-notes", 0.72)))
         self.addCleanup(app.close)
         p = self.provider(app_socket=app.path)
         self.assertTrue(p.prefetch("how did that heating company's phone follow-up go", session_id="s1"))
@@ -994,6 +998,13 @@ class FirstRunTests(ProviderTestCase):
         self.assertIn("Mac", reason)
         self.assertIn("https://github.com/KadenDevAi/cortive-releases", reason)
 
+    def test_on_windows_not_installed_says_where_to_get_cortive(self):
+        available, reason = self.unavailable(installed=False, platform="win32")
+        self.assertFalse(available)
+        self.assertIn("isn't installed on this PC", reason)
+        self.assertNotIn("can't run here", reason)
+        self.assertIn("https://github.com/KadenDevAi/cortive-releases", reason)
+
     def test_an_empty_library_says_so_everywhere(self):
         p = self.provider(db=self.empty_library())
         prompt = p.system_prompt_block()
@@ -1010,7 +1021,7 @@ class FirstRunTests(ProviderTestCase):
         self.assertIn("empty", newest["hint"])
 
     def test_while_the_app_prepares_its_model_the_hint_does_not_say_open_the_app(self):
-        app = FakeApp(ranked(engine="keyword"))
+        app = fake_app(ranked(engine="keyword"))
         self.addCleanup(app.close)
         p = self.provider(app_socket=app.path)
         out = json.loads(p.handle_tool_call("cortive_search", {"query": "zzqxv"}))
@@ -1061,16 +1072,98 @@ class FakeApp:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
+class FakePipeApp:
+    """The same stand-in on Windows: a named pipe with a random name, and the file holding that
+    name (what Cortive for Windows writes to %LOCALAPPDATA%\\cortive-ai\\agent\\search.pipe)."""
+
+    def __init__(self, answer, delay=0.0, name=None):
+        import uuid
+        self.dir = tempfile.mkdtemp(prefix="cpt-")
+        self.name = name or r"\\.\pipe\cortive-agent-" + uuid.uuid4().hex
+        self.path = os.path.join(self.dir, "search.pipe")
+        Path(self.path).write_text(self.name, encoding="ascii")
+        self.requests = []
+        self.answer, self.delay = answer, delay
+        self.closed = False
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+        time.sleep(0.05)  # the first instance exists before a test connects
+
+    def _serve(self):
+        import _winapi
+        while not self.closed:
+            pipe = _winapi.CreateNamedPipe(self.name, _winapi.PIPE_ACCESS_DUPLEX, _winapi.PIPE_WAIT,
+                                           _winapi.PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, _winapi.NULL)
+            try:
+                try:
+                    _winapi.ConnectNamedPipe(pipe, False)
+                except OSError as e:
+                    if e.winerror != _winapi.ERROR_PIPE_CONNECTED:
+                        continue
+                if self.closed:
+                    return
+                data = b""
+                while not data.endswith(b"\n"):
+                    try:
+                        chunk, _ = _winapi.ReadFile(pipe, 65536)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    data += chunk
+                request = json.loads(data)
+                self.requests.append(request)
+                time.sleep(self.delay)
+                reply = self.answer(request)
+                try:
+                    _winapi.WriteFile(pipe, (reply if isinstance(reply, bytes) else json.dumps(reply).encode()) + b"\n")
+                except OSError:
+                    pass
+            finally:
+                _winapi.CloseHandle(pipe)
+
+    def close(self):
+        import _winapi
+        self.closed = True
+        try:  # wake the waiting ConnectNamedPipe so the thread can end
+            _winapi.CloseHandle(_winapi.CreateFile(self.name, _winapi.GENERIC_READ, 0, _winapi.NULL,
+                                                   _winapi.OPEN_EXISTING, 0, _winapi.NULL))
+        except OSError:
+            pass
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+def fake_app(answer, delay=0.0, **kw):
+    """The stand-in for this system: a pipe on Windows, a Unix socket elsewhere."""
+    return (FakePipeApp if os.name == "nt" else FakeApp)(answer, delay, **kw)
+
+
 def ranked(*pairs, engine="meaning"):
     return lambda request: {"ok": True, "engine": engine,
                             "results": [{"id": i, "score": 1.0, "meaning": m} for i, m in pairs]}
 
 
 class AppSearchTests(ProviderTestCase):
-    def with_app(self, answer, delay=0.0):
-        app = FakeApp(answer, delay)
+    def with_app(self, answer, delay=0.0, **kw):
+        app = fake_app(answer, delay, **kw)
         self.addCleanup(app.close)
         return app, self.provider(app_socket=app.path)
+
+    @unittest.skipUnless(os.name == "nt", "Windows only: the app's pipe")
+    def test_a_name_file_pointing_at_another_pipe_is_not_followed(self):
+        # The name must be one of Cortive's own (cortive-agent-<32 hex>); anything else is ignored.
+        app, p = self.with_app(ranked(("tagged-1", 0.9)), name=r"\\.\pipe\not-cortive-" + "0" * 32)
+        out = json.loads(p.handle_tool_call("cortive_search", {"query": "kayak rental"}))
+        self.assertEqual("words", out["engine"])
+        self.assertEqual([], app.requests, "the plugin must not talk to a pipe that isn't Cortive's")
+
+    @unittest.skipUnless(os.name == "nt", "Windows only: the app's pipe")
+    def test_a_stale_name_from_a_closed_app_falls_back_to_words(self):
+        import uuid
+        stale = self.tmp / "search.pipe"
+        stale.write_text(r"\\.\pipe\cortive-agent-" + uuid.uuid4().hex, encoding="ascii")
+        out = json.loads(self.provider(app_socket=str(stale)).handle_tool_call("cortive_search", {"query": "kayak"}))
+        self.assertEqual("words", out["engine"])
 
     def test_the_apps_ranking_comes_first_and_is_labelled(self):
         app, p = self.with_app(ranked(("tagged-2", 0.74), ("tagged-1", 0.70)))
