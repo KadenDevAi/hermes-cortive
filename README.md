@@ -24,7 +24,7 @@ curl -fsSL https://raw.githubusercontent.com/KadenDevAi/cortive-releases/main/in
 
 Or download the DMG from [Cortive's releases](https://github.com/KadenDevAi/cortive-releases/releases/latest). Open Cortive once and capture a few things (a page, a screenshot, a PDF).
 
-On a Windows 10 or 11 PC, install Cortive for Windows from the same releases page once it is published there, open it once, and capture a few things. Hermes runs natively on Windows; the plugin works the same way there.
+On Windows, Hermes needs **Windows 11**. Install Cortive for Windows (it runs on Windows 10 and 11) from the same releases page, open it once, and capture a few things. The plugin works the same way there.
 
 ## Install
 
